@@ -1,0 +1,21 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pokerkit = "*"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "*"}
+pydantic = "*"
+paho-mqtt = "*"
+
+[dev-packages]
+pytest = "*"
+hypothesis = "*"
+ruff = "*"
+httpx = "*"
+
+[requires]
+python_version = "3.12"
+python_full_version = "3.12.7"
