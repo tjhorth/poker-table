@@ -1,4 +1,50 @@
-#Node
-./node_modules
-**/node_modules
+# Node
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+coverage/
 
+# dist (build output)
+dist/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors (keep shared VS Code settings)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+
+# OS
+.DS_Store
+
+# Vision: models, datasets, recordings, training output
+*.pt
+*.onnx
+runs/
+datasets/
+*.mp4
+*.mov
+
+# Local data
+*.sqlite3
+*.db
