@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Poker overlay</title>
+<!--
+  Stream overlay. Add as an OBS Browser Source (any size; it scales with the
+  height of the source: 1280x720, 1920x1080, ...).
+
+  URLs
+    index.html                                  demo: plays a scripted hand loop
+    index.html?bg=1                             demo over a grey backdrop (browser preview)
+    index.html?ws=ws://HOST:8000/ws/overlay     live: events from the engine
+
+  Events (JSON, one object or an array of objects per WebSocket message)
+
+    {"type":"hand_start", "hand":42, "game":"nlh", "blinds":"1/2", "button":8,
+     "players":[{"seat":1,"name":"Maya","stack":412}, ... ],
+     "order":[1,2,3,4,5,6,7,8],      // optional; default = seats clockwise
+     "pot":0 }                       //   starting with the small blind
+        Starts a hand. Tiles stay hidden until the first hole cards register.
+        game = nlh | plo4 | bomb_plo_2brd, or any text to show as-is
+               ("NLH", "PLO 4-card", "Bomb Pot - 2brd PLO").
+
+    {"type":"cards", "seat":3, "cards":["Ah","Kh"]}
+        Hole cards registered for a seat. The first one of the hand makes all
+        tiles phase in; each seat's cards then appear as they register.
+
+    {"type":"blind", "seat":1, "kind":"SB", "amount":1, "stack":411, "pot":1}
+    {"type":"turn",  "seat":3}
+        Moves the "on action" highlight.
+    {"type":"action","seat":3, "action":"raise", "amount":6, "stack":524, "pot":9}
+        action = check | call | bet | raise | all_in | fold
+        amount = what to show on the label (the bet "to" amount)
+        "fold" drops the label, then greys the tile out and slides it away.
+    {"type":"street","street":"flop","board":["As","Kd","7c"],"pot":54}
+        Clears the action labels and reveals the community cards.
+
+    {"type":"next_hand","winners":[{"seat":2,"amount":260,"stack":672}]}
+        The dealer pressed Next Hand. Each winner's stack counts up by "amount"
+        over 2 s ("+$..." in neon green), holds the final value in bright green
+        for 2 s, then the remaining tiles are discarded top to bottom like a
+        waterfall. The next hand_start waits until all of that has finished.
+
+  Everything except "cards" is played one at a time: each event waits for the
+  previous animation to finish. Cards: rank A K Q J T 9..2 + suit s h d c.
+-->
+<style>
+  /* 1rem = 16px at 720px height; everything is in rem so it scales with the source */
+  html { font-size: 2.2222vh; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent;
+               font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #fff; }
+  body.preview, html.preview { background: #2b3a2f; }
+
+  .bar { position: absolute; background: rgba(0,0,0,.65); border-radius: .75rem; padding: .5rem 1.1rem; }
+  #info { top: 1rem; left: 9rem; font-size: 1.4rem; white-space: nowrap; }
+  #pot  { top: 1rem; right: 1rem; font-size: 1.75rem; font-weight: 600; }
+  #board { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%);
+           display: flex; justify-content: center; gap: .6rem; }
+
+  #seats { position: absolute; top: .5rem; left: .75rem; display: flex; flex-direction: column; gap: .25rem; }
+  .slot  { width: 7.4rem; }
+  .seat  { box-sizing: border-box; background: rgba(0,0,0,.72); border: .12rem solid transparent;
+           border-radius: .6rem; padding: .2rem .4rem; text-align: center; transition: border-color .25s; }
+  .seat.active { border-color: #ffd54a; }
+  /* A label is attached underneath: square off the tile's bottom corners so
+     the two read as one shape with no gap at the curve. */
+  .seat.joined { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .cards { display: flex; gap: .2rem; justify-content: center; height: 1.6rem; }
+  .card  { width: 1.15rem; height: 1.6rem; box-sizing: border-box; border-radius: .22rem;
+           background: #fff; color: #111; display: flex; flex-direction: column;
+           align-items: center; justify-content: center;
+           font-size: .62rem; font-weight: 700; line-height: 1.05; }
+  .card.red   { color: #c62828; }
+  .card.empty { background: transparent; border: .1rem dashed rgba(255,255,255,.25); }
+  .name  { font-size: .75rem; font-weight: 600; line-height: 1.15; margin-top: .12rem;
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stack { font-size: .7rem; line-height: 1.1; color: #9be59b; }
+  .stack.winning { color: #39ff14; font-weight: 700; text-shadow: 0 0 .45rem rgba(57,255,20,.85); }
+
+  .label-clip { height: .95rem; overflow: hidden; }
+  .label { height: .95rem; line-height: .95rem; text-align: center; font-size: .62rem;
+           font-weight: 700; letter-spacing: .03em; border-radius: 0 0 .6rem .6rem; }
+  .label.check { background: #546e7a; }
+  .label.call  { background: #1565c0; }
+  .label.bet, .label.raise { background: #ef6c00; }
+  .label.allin { background: #c62828; }
+  .label.fold  { background: #455a64; color: #cfd8dc; }
+  .label.blind { background: #6a1b9a; }
+
+  #board .card { width: 3.6rem; height: 5.1rem; font-size: 1.8rem; border-radius: .5rem; }
+</style>
+</head>
+<body>
+  <div id="info" class="bar"></div>
+  <div id="pot" class="bar"></div>
+  <div id="board"></div>
+  <div id="seats"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+if (params.get('bg')) {
+  document.documentElement.classList.add('preview');
+  document.body.classList.add('preview');
+}
+
+// ---- timing (ms) -----------------------------------------------------
+const PHASE_IN_MS = 400;   // all tiles appear
+const CARDS_MS    = 350;   // one seat's cards appear
+const LABEL_MS    = 500;   // action / blind label drops down
+const TURN_MS     = 250;   // highlight moves
+const FOLD_MS     = 700;   // grey out, slide right, fade
+const MOVE_MS     = 450;   // tiles slide up
+const BOARD_MS    = 400;   // community card appears
+const PAYOUT_MS   = 2000;  // winner's stack counts up
+const HOLD_MS     = 2000;  // final stack stays bright green
+const WATERFALL_MS = 140;  // delay between tiles leaving at the end of a hand
+
+const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
+const LABELS = {
+  check: ['CHECK', 'check'], call: ['CALL', 'call'], bet: ['BET', 'bet'],
+  raise: ['RAISE', 'raise'], all_in: ['ALL-IN', 'allin'], fold: ['FOLD', 'fold'],
+};
+const GAMES = { nlh: 'NLH', plo4: 'PLO 4-card', bomb_plo_2brd: 'Bomb Pot - 2brd PLO' };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const $ = id => document.getElementById(id);
+const els = { info: $('info'), pot: $('pot'), board: $('board'), seats: $('seats') };
+
+// ---- state -----------------------------------------------------------
+let epoch = 0;                 // bumped on each new hand; stale work is dropped
+let chain = Promise.resolve(); // the one-at-a-time animation queue
+let tilesShown = false;
+let tilesReady = Promise.resolve();
+let resolveTiles = () => {};
+const S = { hand: 0, game: 'NLH', blinds: '', street: 'preflop', pot: 0, order: [], players: new Map(), board: [] };
+
+// ---- building blocks ---------------------------------------------------
+function cardEl(code) {
+  const el = document.createElement('div');
+  if (!code) { el.className = 'card empty'; return el; }
+  const suit = code[1];
+  el.className = 'card' + (suit === 'h' || suit === 'd' ? ' red' : '');
+  const rank = document.createElement('span');
+  rank.textContent = code[0] === 'T' ? '10' : code[0];
+  const s = document.createElement('span');
+  s.textContent = SUITS[suit];
+  el.append(rank, s);
+  return el;
+}
+
+function renderInfo() {
+  const street = S.street.charAt(0).toUpperCase() + S.street.slice(1);
+  els.info.textContent = `${S.game}  ·  Blinds ${S.blinds}  ·  Hand #${S.hand}  ·  ${street}`;
+}
+
+function setPot(v) {
+  S.pot = v;
+  els.pot.textContent = `Pot 💰: $${v}`;
+}
+
+function makeSlot(p) {
+  const slot = document.createElement('div');
+  slot.className = 'slot';
+  slot.style.opacity = '0';
+  const seat = document.createElement('div');
+  seat.className = 'seat';
+  const cards = document.createElement('div');
+  cards.className = 'cards';
+  cards.append(cardEl(null), cardEl(null));
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = p.name || 'Seat ' + p.seat;
+  const stack = document.createElement('div');
+  stack.className = 'stack';
+  stack.textContent = '$' + p.stack;
+  seat.append(cards, name, stack);
+  const clip = document.createElement('div');
+  clip.className = 'label-clip';
+  slot.append(seat, clip);
+  Object.assign(p, { slot, seatEl: seat, cardsEl: cards, stackEl: stack, clip, inColumn: true });
+  return slot;
+}
+
+function setStack(p, value) {
+  if (value === undefined) return;
+  p.stack = value;
+  p.stackEl.textContent = '$' + value;
+}
+
+// Drops a coloured label down from under the tile. Resolves when it has landed.
+function dropLabel(p, text, cls) {
+  const label = document.createElement('div');
+  label.className = 'label ' + cls;
+  label.textContent = text;
+  p.seatEl.classList.add('joined');
+  p.clip.replaceChildren(label);
+  return label.animate(
+    [{ transform: 'translateY(-100%)' }, { transform: 'translateY(0)' }],
+    { duration: LABEL_MS, easing: 'cubic-bezier(.2,.9,.3,1.2)' }
+  ).finished;
+}
+
+function clearLabels() {
+  const waits = [];
+  for (const p of S.players.values()) {
+    const label = p.clip && p.clip.firstChild;
+    if (label) {
+      waits.push(label.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250 }).finished
+        .then(() => { label.remove(); p.seatEl.classList.remove('joined'); }));
+    }
+  }
+  return Promise.all(waits);
+}
+
+function columnTops() {
+  const m = new Map();
+  for (const [seat, p] of S.players) if (p.inColumn) m.set(seat, p.slot.getBoundingClientRect().top);
+  return m;
+}
+
+// FLIP: animate every tile still in the column from where it was to where it is.
+function glide(before, delay = 0) {
+  const waits = [];
+  for (const [seat, p] of S.players) {
+    const from = before.get(seat);
+    if (!p.inColumn || from === undefined) continue;
+    const dy = from - p.slot.getBoundingClientRect().top;
+    if (Math.abs(dy) > 1) {
+      waits.push(p.slot.animate(
+        [{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }],
+        { duration: MOVE_MS, delay, fill: 'backwards', easing: 'cubic-bezier(.2,.8,.2,1)' }).finished);
+    }
+  }
+  return waits;
+}
+
+const FOLD_KEYFRAMES = [
+  { transform: 'translateX(0)',    opacity: 1,   filter: 'grayscale(0)', offset: 0 },
+  { transform: 'translateX(0)',    opacity: .85, filter: 'grayscale(1)', offset: .3 },
+  { transform: 'translateX(6rem)', opacity: 0,   filter: 'grayscale(1)', offset: 1 },
+];
+
+// Folded: lift the tile out of the flow where it stands, grey it, slide it
+// right while it fades. Only when that has finished do the tiles below glide up
+// (they are held at their old positions until then).
+async function foldOut(p) {
+  const before = columnTops();
+  const box = p.slot.getBoundingClientRect();
+  const parent = els.seats.getBoundingClientRect();
+  p.inColumn = false;
+  Object.assign(p.slot.style, {
+    position: 'absolute', margin: '0',
+    top: (box.top - parent.top) + 'px', left: (box.left - parent.left) + 'px',
+    width: box.width + 'px',
+  });
+  p.seatEl.classList.remove('active');
+  const out = p.slot.animate(FOLD_KEYFRAMES,
+    { duration: FOLD_MS, easing: 'ease-in', fill: 'forwards' }).finished;
+  await Promise.all([out, ...glide(before, FOLD_MS)]);   // tiles below move only after the fold-out finishes
+  p.slot.remove();
+}
+
+// ---- tiles phase in once the first hole cards are registered -------------
+function showTiles() {
+  if (tilesShown) return;
+  tilesShown = true;
+  const slots = S.order.map(seat => S.players.get(seat)).filter(Boolean).map(p => p.slot);
+  slots.forEach(s => { s.style.opacity = '1'; });
+  Promise.all(slots.map(s => s.animate(
+    [{ opacity: 0, transform: 'translateX(-1.2rem)' }, { opacity: 1, transform: 'translateX(0)' }],
+    { duration: PHASE_IN_MS, easing: 'ease-out' }).finished)).then(resolveTiles);
+}
+
+// ---- events --------------------------------------------------------------
+function startHand(ev) {
+  epoch++;
+  chain = Promise.resolve();
+  tilesShown = false;
+  tilesReady = new Promise(r => { resolveTiles = r; });
+
+  S.hand = ev.hand ?? S.hand + 1;
+  S.game = GAMES[ev.game] || ev.game || S.game;
+  S.blinds = ev.blinds ?? S.blinds;
+  S.street = 'preflop';
+  S.board = [];
+  els.board.replaceChildren();
+  els.seats.replaceChildren();
+  S.players = new Map();
+  for (const p of ev.players) S.players.set(p.seat, { ...p, cards: [] });
+
+  // Column order: small blind on top (seat after the button), button last.
+  const seats = [...S.players.keys()].sort((a, b) => a - b);
+  if (ev.order) {
+    S.order = ev.order.filter(s => S.players.has(s));
+  } else {
+    const after = seats.filter(s => s > ev.button);
+    const upTo = seats.filter(s => s <= ev.button);
+    S.order = [...after, ...upTo];
+  }
+  for (const seat of S.order) els.seats.append(makeSlot(S.players.get(seat)));
+
+  renderInfo();
+  setPot(ev.pot ?? 0);
+}
+
+async function revealCards(ev) {
+  const my = epoch;
+  showTiles();
+  await tilesReady;
+  const p = S.players.get(ev.seat);
+  if (my !== epoch || !p || !p.cardsEl) return;
+  p.cards = ev.cards;
+  p.cardsEl.replaceChildren(...ev.cards.map(cardEl));
+  p.cardsEl.animate(
+    [{ opacity: 0, transform: 'scale(.8)' }, { opacity: 1, transform: 'scale(1)' }],
+    { duration: CARDS_MS, easing: 'ease-out' });
+}
+
+async function doBlind(ev) {
+  const p = S.players.get(ev.seat);
+  if (!p) return;
+  setStack(p, ev.stack);
+  if (ev.pot !== undefined) setPot(ev.pot);
+  await dropLabel(p, `${ev.kind} $${ev.amount}`, 'blind');
+}
+
+async function doTurn(ev) {
+  for (const p of S.players.values()) if (p.seatEl) p.seatEl.classList.remove('active');
+  const p = S.players.get(ev.seat);
+  if (p && p.inColumn) p.seatEl.classList.add('active');
+  await sleep(TURN_MS);
+}
+
+async function doAction(ev) {
+  const p = S.players.get(ev.seat);
+  if (!p || !p.inColumn) return;
+  const [word, cls] = LABELS[ev.action] || [String(ev.action).toUpperCase(), 'check'];
+  const text = ev.amount !== undefined && !['check', 'fold'].includes(ev.action)
+    ? `${word} $${ev.amount}` : word;
+  setStack(p, ev.stack);
+  if (ev.pot !== undefined) setPot(ev.pot);
+  await dropLabel(p, text, cls);
+  if (ev.action === 'fold') await foldOut(p);
+}
+
+async function doStreet(ev) {
+  await clearLabels();
+  S.street = ev.street;
+  renderInfo();
+  if (ev.pot !== undefined) setPot(ev.pot);
+  const fresh = ev.board.slice(S.board.length);
+  S.board = ev.board;
+  const waits = fresh.map(code => {
+    const el = cardEl(code);
+    els.board.append(el);
+    return el.animate(
+      [{ opacity: 0, transform: 'translateY(-1rem)' }, { opacity: 1, transform: 'translateY(0)' }],
+      { duration: BOARD_MS, easing: 'ease-out' }).finished;
+  });
+  await Promise.all(waits);
+}
+
+// Dealer pressed Next Hand: count the winners' stacks up, hold the result,
+// then discard every remaining tile top to bottom (no action labels).
+async function nextHand(ev) {
+  await chain;                       // let in-flight animations finish first
+  if (!tilesShown) return;
+
+  const winners = (ev.winners || [])
+    .map(w => {
+      const p = S.players.get(w.seat);
+      if (!p || !p.stackEl) return null;
+      return { p, from: p.stack, to: w.stack !== undefined ? w.stack : p.stack + w.amount };
+    })
+    .filter(Boolean);
+
+  if (winners.length) {
+    setPot(0);
+    winners.forEach(w => w.p.stackEl.classList.add('winning'));
+    const paint = t => {
+      for (const w of winners) {
+        w.p.stackEl.textContent = '+$' + (w.from + Math.round((w.to - w.from) * t));
+      }
+    };
+    paint(0);
+    const start = performance.now();
+    await new Promise(resolve => {
+      const timer = setInterval(() => {
+        const t = Math.min(1, (performance.now() - start) / PAYOUT_MS);
+        paint(t);
+        if (t >= 1) { clearInterval(timer); resolve(); }
+      }, 4);   // fast enough that the count moves one chip at a time up to ~500
+    });
+
+    // Final state: plus sign gone, still bright green for a moment.
+    for (const w of winners) { w.p.stack = w.to; w.p.stackEl.textContent = '$' + w.to; }
+    await sleep(HOLD_MS);
+    winners.forEach(w => w.p.stackEl.classList.remove('winning'));
+  }
+
+  // Waterfall: each tile greys out and slides away, a beat after the one above.
+  const tiles = S.order.map(seat => S.players.get(seat)).filter(p => p && p.inColumn);
+  tiles.forEach(p => { p.inColumn = false; p.seatEl.classList.remove('active'); });
+  await Promise.all(tiles.map((p, i) => p.slot.animate(FOLD_KEYFRAMES,
+    { duration: FOLD_MS, delay: i * WATERFALL_MS, easing: 'ease-in', fill: 'both' }).finished));
+  tiles.forEach(p => p.slot.remove());   // removed together so nothing jumps mid-cascade
+}
+
+// One at a time: each queued task waits for the previous one to finish.
+function enqueue(task) {
+  const my = epoch;
+  chain = chain.then(async () => {
+    if (my !== epoch) return;
+    await tilesReady;
+    if (my !== epoch) return;
+    await task();
+  }).catch(console.error);
+}
+
+// Events are applied strictly in arrival order. "next_hand" holds the line
+// until its end-of-hand sequence is over, so the following hand_start (and the
+// hole cards after it) can't cut in.
+let gate = Promise.resolve();
+function handle(ev) {
+  gate = gate.then(() => dispatch(ev)).catch(console.error);
+}
+
+async function dispatch(ev) {
+  switch (ev.type) {
+    case 'hand_start': startHand(ev); break;
+    case 'cards':      revealCards(ev); break;
+    case 'blind':      enqueue(() => doBlind(ev)); break;
+    case 'turn':       enqueue(() => doTurn(ev)); break;
+    case 'action':     enqueue(() => doAction(ev)); break;
+    case 'street':     enqueue(() => doStreet(ev)); break;
+    case 'next_hand':  await nextHand(ev); break;
+  }
+}
+window.overlay = { handle };
+
+// ---- live mode: events from the engine over WebSocket --------------------
+function live(url) {
+  let retry = 500;
+  const connect = () => {
+    const ws = new WebSocket(url);
+    ws.onopen = () => { retry = 500; };
+    ws.onmessage = e => {
+      const data = JSON.parse(e.data);
+      (Array.isArray(data) ? data : [data]).forEach(handle);
+    };
+    ws.onclose = () => { setTimeout(connect, retry); retry = Math.min(retry * 2, 5000); };
+  };
+  connect();
+}
+
+// ---- demo mode: a scripted hand, looped ----------------------------------
+async function demo() {
+  const NAMES = ['Maya', 'Dan', 'Priya', 'Leo', 'Sam', 'Tim H', 'Chris', 'Ava'];
+  const STACKS = [412, 188, 530, 95, 260, 740, 300, 720];
+  let hand = 41;
+  let button = 8;
+
+  while (true) {
+    hand++;
+    const players = NAMES.map((name, i) => ({ seat: i + 1, name, stack: STACKS[i] }));
+    const stack = Object.fromEntries(players.map(p => [p.seat, p.stack]));
+    const inStreet = {};
+    let pot = 0;
+
+    const seats = players.map(p => p.seat);
+    const after = seats.filter(s => s > button);
+    const order = [...after, ...seats.filter(s => s <= button)];
+    const [sb, bb, ...rest] = order;
+    const act = (seat, type, to) => {
+      let put = 0;
+      if (type === 'call' && to === undefined) to = Math.max(...Object.values(inStreet));
+      if (type === 'all_in') { put = stack[seat]; to = (inStreet[seat] || 0) + put; }
+      else if (to !== undefined) put = Math.min(stack[seat], to - (inStreet[seat] || 0));
+      stack[seat] -= put; inStreet[seat] = (inStreet[seat] || 0) + put; pot += put;
+      return { type: 'action', seat, action: type, amount: to, stack: stack[seat], pot };
+    };
+    const blind = (seat, kind, amount) => {
+      stack[seat] -= amount; inStreet[seat] = amount; pot += amount;
+      return { type: 'blind', seat, kind, amount, stack: stack[seat], pot };
+    };
+
+    handle({ type: 'hand_start', hand, game: params.get('game') || 'nlh', blinds: '1/2', button, players, order, pot: 0 });
+    await sleep(1200);
+
+    // hole cards register one seat at a time, in no particular order
+    const deck = ['Ah', 'Kh', '9c', '9d', 'Qs', 'Js', '7h', '2c', 'Td', 'Th', 'As', 'Ad', '6s', '5s', 'Kc', 'Qc'];
+    const regOrder = [3, 1, 5, 2, 7, 4, 8, 6].map(n => order[n - 1]);
+    for (const seat of regOrder) {
+      handle({ type: 'cards', seat, cards: [deck[(seat - 1) * 2], deck[(seat - 1) * 2 + 1]] });
+      await sleep(450);
+    }
+    await sleep(600);
+
+    // automatic blinds, then the action lands on UTG
+    handle(blind(sb, 'SB', 1));
+    handle(blind(bb, 'BB', 2));
+    const utg = rest[0];
+    handle({ type: 'turn', seat: utg });
+    await sleep(2200);
+
+    const step = async (seat, type, to, pause = 1500) => {
+      handle({ type: 'turn', seat });
+      handle(act(seat, type, to));
+      await sleep(pause);
+    };
+
+    // preflop
+    await step(rest[0], 'raise', 6);
+    await step(rest[1], 'fold');
+    await step(rest[2], 'call', 6);
+    await step(rest[3], 'fold');
+    await step(rest[4], 'call', 6);
+    await step(rest[5], 'fold');
+    await step(sb, 'fold');
+    await step(bb, 'call', 6);
+
+    // flop
+    for (const k in inStreet) delete inStreet[k];
+    handle({ type: 'street', street: 'flop', board: ['As', 'Kd', '7c'], pot });
+    await sleep(1500);
+    await step(bb, 'check');
+    await step(rest[0], 'bet', 10);
+    await step(rest[2], 'fold');
+    await step(rest[4], 'call', 10);
+    await step(bb, 'raise', 30);
+    await step(rest[0], 'all_in');
+    await step(rest[4], 'fold');
+    await step(bb, 'all_in');
+
+    handle({ type: 'street', street: 'turn', board: ['As', 'Kd', '7c', '9h'], pot });
+    await sleep(1800);
+    handle({ type: 'street', street: 'river', board: ['As', 'Kd', '7c', '9h', '2s'], pot });
+    await sleep(1800);
+
+    // showdown, then the dealer presses Next Hand
+    await sleep(2500);
+    const winner = rest[0];
+    handle({ type: 'next_hand', winners: [{ seat: winner, amount: pot, stack: stack[winner] + pot }] });
+
+    button = button % players.length + 1;
+  }
+}
+
+const wsUrl = params.get('ws');
+wsUrl ? live(wsUrl) : demo();
+</script>
+</body>
+</html>
