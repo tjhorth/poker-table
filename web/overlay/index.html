@@ -33,8 +33,29 @@
         action = check | call | bet | raise | all_in | fold
         amount = what to show on the label (the bet "to" amount)
         "fold" drops the label, then greys the tile out and slides it away.
-    {"type":"street","street":"flop","board":["As","Kd","7c"],"pot":54}
-        Clears the action labels and reveals the community cards.
+    {"type":"street","street":"flop","board":["As","Kd","7c"],"pots":[54]}
+        Clears the action labels and reveals the community cards. Send it once
+        every card of the street is registered: the cards then appear one after
+        another in a waterfall, right side of the screen, vertically centred.
+        For a double board game send
+        "boards":[["As","Kd","7c"],["2h","9d","Jc"]] instead; the second board
+        cascades in after the first.
+
+    {"type":"equity","equities":{"3":62.4,"5":37.6},"outs":{"5":["Kh","Th","9h"]}}
+        Win chance per seat (percent, shown on each tile) and, for seats that
+        are behind, the next cards that would put them in the lead. A seat's outs
+        are shown at the bottom centre of the screen while it is that seat's turn.
+
+  Pots: any event may carry "pots":[main, side1, side2, ...] (or the older
+  single "pot":N). One entry shows "Pot"; several show "Main Pot" and
+  "Side Pot 1", "Side Pot 2", ... New side pots drop in as they are created.
+  An entry is a number, or {"amount":200,"eligible":[2,5,7]} to also list who
+  can win that pot (seat numbers, folded players left out). The eligible line
+  is shown whenever there is more than one pot.
+
+  Hole cards: 2 for NLH, 4 for PLO and bomb-pot PLO (taken from the game name),
+  or set "hole_cards":N on hand_start. Send all of a seat's cards in one
+  "cards" event.
 
     {"type":"next_hand","winners":[{"seat":2,"amount":260,"stack":672}]}
         The dealer pressed Next Hand. Each winner's stack counts up by "amount"
@@ -54,9 +75,17 @@
 
   .bar { position: absolute; background: rgba(0,0,0,.65); border-radius: .75rem; padding: .5rem 1.1rem; }
   #info { top: 1rem; left: 9rem; font-size: 1.4rem; white-space: nowrap; }
-  #pot  { top: 1rem; right: 1rem; font-size: 1.75rem; font-weight: 600; }
-  #board { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%);
-           display: flex; justify-content: center; gap: .6rem; }
+  #pots { position: absolute; top: 1rem; right: 1rem; display: flex; flex-direction: column;
+          align-items: flex-end; gap: .4rem; }
+  .pot-bar { background: rgba(0,0,0,.65); border-radius: .75rem; padding: .5rem 1.1rem;
+             font-size: 1.75rem; font-weight: 600; white-space: nowrap;
+             display: flex; flex-direction: column; align-items: flex-end; }
+  .pot-bar.side { font-size: 1.2rem; padding: .35rem .9rem; background: rgba(0,0,0,.55); }
+  .pot-elig { font-size: .62rem; font-weight: 500; line-height: 1.3; margin-top: .1rem;
+              color: #b0bec5; white-space: normal; text-align: right; max-width: 18rem; }
+  #board { position: absolute; top: 50%; right: 1rem; transform: translateY(-50%);
+           display: flex; flex-direction: column; align-items: flex-end; gap: .45rem; }
+  .board-row { display: flex; justify-content: flex-end; gap: .3rem; }
 
   #seats { position: absolute; top: .5rem; left: .75rem; display: flex; flex-direction: column; gap: .25rem; }
   .slot  { width: 7.4rem; }
@@ -75,7 +104,10 @@
   .card.empty { background: transparent; border: .1rem dashed rgba(255,255,255,.25); }
   .name  { font-size: .75rem; font-weight: 600; line-height: 1.15; margin-top: .12rem;
            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .money-row { display: flex; justify-content: center; align-items: baseline; gap: .4rem; }
   .stack { font-size: .7rem; line-height: 1.1; color: #9be59b; }
+  .equity { font-size: .7rem; line-height: 1.1; font-weight: 700; color: #90caf9; }
+  .equity.lead { color: #ffd54a; }
   .stack.winning { color: #39ff14; font-weight: 700; text-shadow: 0 0 .45rem rgba(57,255,20,.85); }
 
   .label-clip { height: .95rem; overflow: hidden; }
@@ -88,14 +120,24 @@
   .label.fold  { background: #455a64; color: #cfd8dc; }
   .label.blind { background: #6a1b9a; }
 
-  #board .card { width: 3.6rem; height: 5.1rem; font-size: 1.8rem; border-radius: .5rem; }
+  #board .card { width: 2.3rem; height: 3.2rem; font-size: 1.2rem; border-radius: .35rem; }
+  #outs { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%);
+          display: flex; flex-direction: column; align-items: center; gap: .4rem; max-width: 36rem; }
+  .outs-title { background: rgba(0,0,0,.72); border-radius: .6rem; padding: .3rem .9rem;
+                font-size: 1rem; font-weight: 600; white-space: nowrap; }
+  .outs-row { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem; }
+  #outs .card { width: 1.7rem; height: 2.4rem; font-size: .95rem; border-radius: .3rem; }
+
+  /* Tall, narrow canvases: drop the pots below the header bar so they can't collide. */
+  @media (max-aspect-ratio: 4/3) { #pots { top: 4rem; } }
 </style>
 </head>
 <body>
   <div id="info" class="bar"></div>
-  <div id="pot" class="bar"></div>
+  <div id="pots"></div>
   <div id="board"></div>
   <div id="seats"></div>
+  <div id="outs"></div>
 
 <script>
 const params = new URLSearchParams(location.search);
@@ -111,7 +153,8 @@ const LABEL_MS    = 500;   // action / blind label drops down
 const TURN_MS     = 250;   // highlight moves
 const FOLD_MS     = 700;   // grey out, slide right, fade
 const MOVE_MS     = 450;   // tiles slide up
-const BOARD_MS    = 400;   // community card appears
+const BOARD_MS    = 400;   // one community card lands
+const BOARD_STAGGER_MS = 150;   // gap between cards in the waterfall
 const PAYOUT_MS   = 2000;  // winner's stack counts up
 const HOLD_MS     = 2000;  // final stack stays bright green
 const WATERFALL_MS = 140;  // delay between tiles leaving at the end of a hand
@@ -124,7 +167,7 @@ const LABELS = {
 const GAMES = { nlh: 'NLH', plo4: 'PLO 4-card', bomb_plo_2brd: 'Bomb Pot - 2brd PLO' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const $ = id => document.getElementById(id);
-const els = { info: $('info'), pot: $('pot'), board: $('board'), seats: $('seats') };
+const els = { info: $('info'), pots: $('pots'), board: $('board'), seats: $('seats'), outs: $('outs') };
 
 // ---- state -----------------------------------------------------------
 let epoch = 0;                 // bumped on each new hand; stale work is dropped
@@ -132,7 +175,7 @@ let chain = Promise.resolve(); // the one-at-a-time animation queue
 let tilesShown = false;
 let tilesReady = Promise.resolve();
 let resolveTiles = () => {};
-const S = { hand: 0, game: 'NLH', blinds: '', street: 'preflop', pot: 0, order: [], players: new Map(), board: [] };
+const S = { hand: 0, game: 'NLH', blinds: '', street: 'preflop', pots: [0], holes: 2, order: [], players: new Map(), equity: {}, outs: {}, turnSeat: null };
 
 // ---- building blocks ---------------------------------------------------
 function cardEl(code) {
@@ -153,9 +196,41 @@ function renderInfo() {
   els.info.textContent = `${S.game}  ·  Blinds ${S.blinds}  ·  Hand #${S.hand}  ·  ${street}`;
 }
 
-function setPot(v) {
-  S.pot = v;
-  els.pot.textContent = `Pot 💰: $${v}`;
+// One bar per pot: "Pot", or "Main Pot" plus "Side Pot 1", "Side Pot 2", ...
+// With several pots, each also lists who is eligible to win it.
+function setPots(items) {
+  const list = (items.length ? items : [0])
+    .map(x => (typeof x === 'number' ? { amount: x } : x));
+  list.forEach((pot, i) => {
+    let bar = els.pots.children[i];
+    if (!bar) {
+      bar = document.createElement('div');
+      els.pots.append(bar);
+      if (i > 0) {   // a new side pot drops in
+        bar.animate([{ opacity: 0, transform: 'translateY(-.7rem)' }, { opacity: 1, transform: 'translateY(0)' }],
+                    { duration: 350, easing: 'ease-out' });
+      }
+    }
+    bar.className = 'pot-bar' + (i > 0 ? ' side' : '');
+    const name = list.length === 1 ? 'Pot' : i === 0 ? 'Main Pot' : `Side Pot ${i}`;
+    const head = document.createElement('div');
+    head.textContent = `${name} 💰: $${pot.amount}`;
+    bar.replaceChildren(head);
+    if (list.length > 1 && pot.eligible && pot.eligible.length) {
+      const who = document.createElement('div');
+      who.className = 'pot-elig';
+      who.textContent = 'Eligible: ' + pot.eligible
+        .map(seat => (S.players.get(seat) || {}).name || 'Seat ' + seat).join(', ');
+      bar.append(who);
+    }
+  });
+  while (els.pots.children.length > list.length) els.pots.lastChild.remove();
+  S.pots = list;
+}
+const setPot = v => setPots([v]);
+function applyPot(ev) {
+  if (ev.pots) setPots(ev.pots);
+  else if (ev.pot !== undefined) setPot(ev.pot);
 }
 
 function makeSlot(p) {
@@ -166,18 +241,23 @@ function makeSlot(p) {
   seat.className = 'seat';
   const cards = document.createElement('div');
   cards.className = 'cards';
-  cards.append(cardEl(null), cardEl(null));
+  cards.append(...Array.from({ length: S.holes }, () => cardEl(null)));
   const name = document.createElement('div');
   name.className = 'name';
   name.textContent = p.name || 'Seat ' + p.seat;
   const stack = document.createElement('div');
   stack.className = 'stack';
   stack.textContent = '$' + p.stack;
-  seat.append(cards, name, stack);
+  const equity = document.createElement('span');
+  equity.className = 'equity';
+  const money = document.createElement('div');
+  money.className = 'money-row';
+  money.append(stack, equity);
+  seat.append(cards, name, money);
   const clip = document.createElement('div');
   clip.className = 'label-clip';
   slot.append(seat, clip);
-  Object.assign(p, { slot, seatEl: seat, cardsEl: cards, stackEl: stack, clip, inColumn: true });
+  Object.assign(p, { slot, seatEl: seat, cardsEl: cards, stackEl: stack, equityEl: equity, clip, inColumn: true });
   return slot;
 }
 
@@ -282,8 +362,15 @@ function startHand(ev) {
   S.game = GAMES[ev.game] || ev.game || S.game;
   S.blinds = ev.blinds ?? S.blinds;
   S.street = 'preflop';
-  S.board = [];
+  S.holes = ev.hole_cards ?? (/plo|omaha/i.test(S.game) ? 4 : 2);
   els.board.replaceChildren();
+  els.board.classList.remove('two');
+  els.pots.replaceChildren();
+  els.outs.replaceChildren();
+  S.equity = {};
+  S.outs = {};
+  S.turnSeat = null;
+  outsKey = '';
   els.seats.replaceChildren();
   S.players = new Map();
   for (const p of ev.players) S.players.set(p.seat, { ...p, cards: [] });
@@ -300,7 +387,7 @@ function startHand(ev) {
   for (const seat of S.order) els.seats.append(makeSlot(S.players.get(seat)));
 
   renderInfo();
-  setPot(ev.pot ?? 0);
+  if (ev.pots) setPots(ev.pots); else setPot(ev.pot ?? 0);
 }
 
 async function revealCards(ev) {
@@ -316,11 +403,59 @@ async function revealCards(ev) {
     { duration: CARDS_MS, easing: 'ease-out' });
 }
 
+// Win chance on every tile; the leader's number is gold.
+function renderEquity() {
+  let lead = null;
+  for (const [seat, pct] of Object.entries(S.equity)) {
+    if (lead === null || pct > S.equity[lead]) lead = seat;
+  }
+  for (const [seat, p] of S.players) {
+    if (!p.equityEl) continue;
+    const pct = S.equity[seat];
+    p.equityEl.textContent = pct === undefined ? '' : `${Math.round(pct)}%`;
+    p.equityEl.classList.toggle('lead', String(seat) === lead);
+  }
+}
+
+// Outs for the player on action, if they are behind: bottom centre.
+let outsKey = '';
+function renderOuts() {
+  const seat = S.turnSeat;
+  const p = seat === null ? null : S.players.get(seat);
+  const cards = seat === null ? null : S.outs[seat];
+  if (!p || !cards || !cards.length) {
+    if (outsKey) els.outs.replaceChildren();
+    outsKey = '';
+    return;
+  }
+  const key = `${seat}:${cards.join(',')}`;
+  if (key === outsKey) return;
+  outsKey = key;
+
+  const title = document.createElement('div');
+  title.className = 'outs-title';
+  title.textContent = `${p.name || 'Seat ' + seat} · ${cards.length} out${cards.length === 1 ? '' : 's'}`;
+  const row = document.createElement('div');
+  row.className = 'outs-row';
+  row.append(...cards.map(cardEl));
+  els.outs.replaceChildren(title, row);
+  els.outs.animate([{ opacity: 0, transform: 'translateX(-50%) translateY(.8rem)' },
+                    { opacity: 1, transform: 'translateX(-50%) translateY(0)' }],
+                   { duration: 300, easing: 'ease-out' });
+}
+
+async function doEquity(ev) {
+  S.equity = ev.equities || {};
+  S.outs = ev.outs || {};
+  renderEquity();
+  renderOuts();
+}
+
 async function doBlind(ev) {
   const p = S.players.get(ev.seat);
   if (!p) return;
   setStack(p, ev.stack);
-  if (ev.pot !== undefined) setPot(ev.pot);
+  applyPot(ev);
   await dropLabel(p, `${ev.kind} $${ev.amount}`, 'blind');
 }
 
@@ -328,6 +463,8 @@ async function doTurn(ev) {
   for (const p of S.players.values()) if (p.seatEl) p.seatEl.classList.remove('active');
   const p = S.players.get(ev.seat);
   if (p && p.inColumn) p.seatEl.classList.add('active');
+  S.turnSeat = ev.seat;
+  renderOuts();
   await sleep(TURN_MS);
 }
 
@@ -338,24 +475,42 @@ async function doAction(ev) {
   const text = ev.amount !== undefined && !['check', 'fold'].includes(ev.action)
     ? `${word} $${ev.amount}` : word;
   setStack(p, ev.stack);
-  if (ev.pot !== undefined) setPot(ev.pot);
+  applyPot(ev);
+  if (S.turnSeat === ev.seat) { S.turnSeat = null; renderOuts(); }
   await dropLabel(p, text, cls);
   if (ev.action === 'fold') await foldOut(p);
 }
 
 async function doStreet(ev) {
+  S.turnSeat = null;
+  renderOuts();
   await clearLabels();
   S.street = ev.street;
   renderInfo();
-  if (ev.pot !== undefined) setPot(ev.pot);
-  const fresh = ev.board.slice(S.board.length);
-  S.board = ev.board;
-  const waits = fresh.map(code => {
-    const el = cardEl(code);
-    els.board.append(el);
-    return el.animate(
-      [{ opacity: 0, transform: 'translateY(-1rem)' }, { opacity: 1, transform: 'translateY(0)' }],
-      { duration: BOARD_MS, easing: 'ease-out' }).finished;
+  applyPot(ev);
+
+  // One row per board (two for double-board games). Only the new cards appear,
+  // and they cascade in: left to right, and board 2 after board 1.
+  const boards = ev.boards || [ev.board];
+  els.board.classList.toggle('two', boards.length > 1);
+  const waits = [];
+  let n = 0;
+  boards.forEach((cards, b) => {
+    let row = els.board.children[b];
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'board-row';
+      els.board.append(row);
+    }
+    cards.slice(row.children.length).forEach(code => {
+      const el = cardEl(code);
+      el.style.opacity = '0';
+      row.append(el);
+      waits.push(el.animate(
+        [{ opacity: 0, transform: 'translateY(-1.2rem)' }, { opacity: 1, transform: 'translateY(0)' }],
+        { duration: BOARD_MS, delay: n++ * BOARD_STAGGER_MS, easing: 'ease-out', fill: 'backwards' })
+        .finished.then(() => { el.style.opacity = '1'; }));
+    });
   });
   await Promise.all(waits);
 }
@@ -365,6 +520,8 @@ async function doStreet(ev) {
 async function nextHand(ev) {
   await chain;                       // let in-flight animations finish first
   if (!tilesShown) return;
+  S.turnSeat = null;
+  renderOuts();
 
   const winners = (ev.winners || [])
     .map(w => {
@@ -433,6 +590,7 @@ async function dispatch(ev) {
     case 'turn':       enqueue(() => doTurn(ev)); break;
     case 'action':     enqueue(() => doAction(ev)); break;
     case 'street':     enqueue(() => doStreet(ev)); break;
+    case 'equity':     enqueue(() => doEquity(ev)); break;
     case 'next_hand':  await nextHand(ev); break;
   }
 }
@@ -453,94 +611,189 @@ function live(url) {
   connect();
 }
 
-// ---- demo mode: a scripted hand, looped ----------------------------------
+// ---- demo mode: scripted hands, looped -----------------------------------
+// Cycles NLH (with a main pot and two side pots), PLO 4-card, and a
+// double-board PLO bomb pot. ?game=nlh|plo4|bomb_plo_2brd shows just one.
 async function demo() {
   const NAMES = ['Maya', 'Dan', 'Priya', 'Leo', 'Sam', 'Tim H', 'Chris', 'Ava'];
   const STACKS = [412, 188, 530, 95, 260, 740, 300, 720];
-  let hand = 41;
-  let button = 8;
+  const forced = params.get('game');
+  const loop = forced ? [forced] : ['nlh', 'plo4', 'bomb_plo_2brd'];
+  let hand = 41, button = 8, round = 0;
 
   while (true) {
     hand++;
-    const players = NAMES.map((name, i) => ({ seat: i + 1, name, stack: STACKS[i] }));
-    const stack = Object.fromEntries(players.map(p => [p.seat, p.stack]));
-    const inStreet = {};
-    let pot = 0;
+    const game = loop[round++ % loop.length];
+    const bomb = game === 'bomb_plo_2brd';
+    const holes = game === 'nlh' ? 2 : 4;
 
+    const players = NAMES.map((name, i) => ({ seat: i + 1, name, stack: STACKS[i] }));
     const seats = players.map(p => p.seat);
+    const stack = {}, contrib = {}, inStreet = {};
+    const folded = new Set();
+    players.forEach(p => { stack[p.seat] = p.stack; contrib[p.seat] = 0; });
+
     const after = seats.filter(s => s > button);
     const order = [...after, ...seats.filter(s => s <= button)];
     const [sb, bb, ...rest] = order;
-    const act = (seat, type, to) => {
-      let put = 0;
-      if (type === 'call' && to === undefined) to = Math.max(...Object.values(inStreet));
-      if (type === 'all_in') { put = stack[seat]; to = (inStreet[seat] || 0) + put; }
-      else if (to !== undefined) put = Math.min(stack[seat], to - (inStreet[seat] || 0));
-      stack[seat] -= put; inStreet[seat] = (inStreet[seat] || 0) + put; pot += put;
-      return { type: 'action', seat, action: type, amount: to, stack: stack[seat], pot };
+
+    // Main pot + side pots from everyone's total contribution; a new pot starts
+    // above each all-in player's level.
+    const potsNow = () => {
+      const live = seats.filter(s => !folded.has(s));
+      const caps = [...new Set(live.filter(s => stack[s] === 0 && contrib[s] > 0).map(s => contrib[s]))]
+        .sort((a, b) => a - b);
+      const top = Math.max(0, ...live.map(s => contrib[s]));
+      if (!caps.length || caps[caps.length - 1] < top) caps.push(top);
+      const pots = [];
+      let prev = 0;
+      for (const cap of caps) {
+        let amt = 0;
+        for (const s of seats) amt += Math.max(0, Math.min(contrib[s], cap) - prev);
+        if (amt > 0) pots.push({ amount: amt, eligible: live.filter(s => contrib[s] >= cap) });
+        prev = cap;
+      }
+      return pots.length ? pots : [{ amount: 0 }];
     };
-    const blind = (seat, kind, amount) => {
-      stack[seat] -= amount; inStreet[seat] = amount; pot += amount;
-      return { type: 'blind', seat, kind, amount, stack: stack[seat], pot };
+    const put = (seat, amt) => {
+      stack[seat] -= amt;
+      inStreet[seat] = (inStreet[seat] || 0) + amt;
+      contrib[seat] += amt;
+    };
+    const act = (seat, type, to) => {
+      if (type === 'call' && to === undefined) to = Math.max(0, ...Object.values(inStreet));
+      let amt = 0;
+      if (type === 'all_in') { amt = stack[seat]; to = (inStreet[seat] || 0) + amt; }
+      else if (to !== undefined) amt = Math.min(stack[seat], to - (inStreet[seat] || 0));
+      put(seat, amt);
+      if (type === 'fold') folded.add(seat);
+      return { type: 'action', seat, action: type, amount: to, stack: stack[seat], pots: potsNow() };
+    };
+    const post = (seat, kind, amount) => {
+      put(seat, amount);
+      return { type: 'blind', seat, kind, amount, stack: stack[seat], pots: potsNow() };
+    };
+    const step = async (seat, type, to, pause = 1300) => {
+      handle({ type: 'turn', seat });
+      handle(act(seat, type, to));
+      if (type === 'fold') sendEquity();
+      await sleep(pause);
+    };
+    const nextStreet = () => { for (const k in inStreet) delete inStreet[k]; };
+
+
+    // shuffled deck
+    const deck = [];
+    for (const r of 'AKQJT98765432') for (const su of 'shdc') deck.push(r + su);
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    const dealt = {};
+    seats.forEach((seat, i) => { dealt[seat] = deck.slice(i * holes, (i + 1) * holes); });
+    const boardCards = deck.slice(seats.length * holes);
+    const boards = bomb ? [boardCards.slice(0, 5), boardCards.slice(5, 10)] : [boardCards.slice(0, 5)];
+    const reveal = n => boards.map(b => b.slice(0, n));
+
+    // Illustrative numbers only; the real engine computes true equity and outs.
+    let streetNow = 'preflop';
+    const sendEquity = () => {
+      const live = seats.filter(s => !folded.has(s));
+      if (live.length < 2) return;
+      const w = live.map(() => 1 + Math.random() * 4);
+      const total = w.reduce((a, b) => a + b, 0);
+      const equities = {};
+      live.forEach((s, i) => { equities[s] = Math.round(w[i] / total * 1000) / 10; });
+      const lead = live.reduce((a, b) => (equities[a] >= equities[b] ? a : b));
+      const n = { preflop: 0, flop: 3, turn: 4, river: 5 }[streetNow];
+      const outs = {};
+      if ((n === 3 || n === 4) && boards.length === 1) {
+        const used = new Set([...seats.flatMap(s => dealt[s]), ...boards[0].slice(0, n)]);
+        const pool = deck.filter(c => !used.has(c));
+        live.filter(s => s !== lead && Math.random() < 0.7).forEach(s => {
+          outs[s] = pool.slice().sort(() => Math.random() - 0.5).slice(0, 5 + Math.floor(Math.random() * 5));
+        });
+      }
+      handle({ type: 'equity', equities, outs });
+    };
+    const send = ev => {
+      if (ev.type === 'street') streetNow = ev.street;
+      handle(ev);
+      if (ev.type === 'street') sendEquity();
     };
 
-    handle({ type: 'hand_start', hand, game: params.get('game') || 'nlh', blinds: '1/2', button, players, order, pot: 0 });
+    handle({ type: 'hand_start', hand, game, blinds: '1/2', button, players, order, pots: [0] });
     await sleep(1200);
 
     // hole cards register one seat at a time, in no particular order
-    const deck = ['Ah', 'Kh', '9c', '9d', 'Qs', 'Js', '7h', '2c', 'Td', 'Th', 'As', 'Ad', '6s', '5s', 'Kc', 'Qc'];
-    const regOrder = [3, 1, 5, 2, 7, 4, 8, 6].map(n => order[n - 1]);
-    for (const seat of regOrder) {
-      handle({ type: 'cards', seat, cards: [deck[(seat - 1) * 2], deck[(seat - 1) * 2 + 1]] });
+    for (const n of [3, 1, 5, 2, 7, 4, 8, 6]) {
+      handle({ type: 'cards', seat: order[n - 1], cards: dealt[order[n - 1]] });
       await sleep(450);
     }
+    sendEquity();
     await sleep(600);
 
-    // automatic blinds, then the action lands on UTG
-    handle(blind(sb, 'SB', 1));
-    handle(blind(bb, 'BB', 2));
-    const utg = rest[0];
-    handle({ type: 'turn', seat: utg });
-    await sleep(2200);
+    if (bomb) {
+      // bomb pot: everyone antes, no preflop betting, straight to the flop
+      for (const seat of order) handle(post(seat, 'ANTE', 5));
+      await sleep(order.length * 500 + 400);
+      nextStreet();
+      send({ type: 'street', street: 'flop', boards: reveal(3), pots: potsNow() });
+      await sleep(1600);
+      handle({ type: 'turn', seat: sb });
+      await sleep(400);
+      await step(sb, 'check');
+      await step(bb, 'bet', 20);
+      await step(rest[0], 'call', 20);
+      for (const seat of [...rest.slice(1), sb]) await step(seat, 'fold', undefined, 900);
+      nextStreet();
+      send({ type: 'street', street: 'turn', boards: reveal(4), pots: potsNow() });
+      await sleep(1600);
+      await step(bb, 'check');
+      await step(rest[0], 'bet', 40);
+      await step(bb, 'call', 40);
+      nextStreet();
+      send({ type: 'street', street: 'river', boards: reveal(5), pots: potsNow() });
+      await sleep(2500);
+      const total = potsNow()[0].amount;
+      handle({ type: 'next_hand', winners: [{ seat: bb, amount: total, stack: stack[bb] + total }] });
+    } else {
+      // blinds post automatically, then the action lands on UTG
+      handle(post(sb, 'SB', 1));
+      handle(post(bb, 'BB', 2));
+      handle({ type: 'turn', seat: rest[0] });
+      await sleep(2200);
 
-    const step = async (seat, type, to, pause = 1500) => {
-      handle({ type: 'turn', seat });
-      handle(act(seat, type, to));
-      await sleep(pause);
-    };
+      // short stacks shove one after another, building a main pot and two side pots
+      await step(rest[0], 'fold');
+      await step(rest[1], 'all_in');           // 95
+      await step(rest[2], 'call');
+      await step(rest[3], 'fold');
+      await step(rest[4], 'raise', 260);
+      await step(rest[5], 'fold');
+      await step(sb, 'fold');
+      await step(bb, 'all_in');                // 188
+      await step(rest[2], 'all_in');           // 260
+      await sleep(800);
 
-    // preflop
-    await step(rest[0], 'raise', 6);
-    await step(rest[1], 'fold');
-    await step(rest[2], 'call', 6);
-    await step(rest[3], 'fold');
-    await step(rest[4], 'call', 6);
-    await step(rest[5], 'fold');
-    await step(sb, 'fold');
-    await step(bb, 'call', 6);
+      nextStreet();
+      send({ type: 'street', street: 'flop', board: boards[0].slice(0, 3), pots: potsNow() });
+      await sleep(1600);
+      send({ type: 'street', street: 'turn', board: boards[0].slice(0, 4), pots: potsNow() });
+      await sleep(1600);
+      send({ type: 'street', street: 'river', board: boards[0].slice(0, 5), pots: potsNow() });
+      await sleep(2500);
 
-    // flop
-    for (const k in inStreet) delete inStreet[k];
-    handle({ type: 'street', street: 'flop', board: ['As', 'Kd', '7c'], pot });
-    await sleep(1500);
-    await step(bb, 'check');
-    await step(rest[0], 'bet', 10);
-    await step(rest[2], 'fold');
-    await step(rest[4], 'call', 10);
-    await step(bb, 'raise', 30);
-    await step(rest[0], 'all_in');
-    await step(rest[4], 'fold');
-    await step(bb, 'all_in');
-
-    handle({ type: 'street', street: 'turn', board: ['As', 'Kd', '7c', '9h'], pot });
-    await sleep(1800);
-    handle({ type: 'street', street: 'river', board: ['As', 'Kd', '7c', '9h', '2s'], pot });
-    await sleep(1800);
-
-    // showdown, then the dealer presses Next Hand
-    await sleep(2500);
-    const winner = rest[0];
-    handle({ type: 'next_hand', winners: [{ seat: winner, amount: pot, stack: stack[winner] + pot }] });
+      // each pot goes to a different player
+      const pots = potsNow();
+      const winnersBySeat = [rest[1], bb, rest[2]];   // smallest stack takes the main pot
+      handle({
+        type: 'next_hand',
+        winners: pots.map((pot, i) => ({
+          seat: winnersBySeat[i], amount: pot.amount, stack: stack[winnersBySeat[i]] + pot.amount,
+        })),
+      });
+    }
 
     button = button % players.length + 1;
   }
