@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc -b && vite build",
+    "tw:build": "npx @tailwindcss/cli -i ./src/css/input.css -o ./src/css/output.css --watch",
     "test": "vitest",
     "gen:types": "openapi-typescript http://localhost:8000/openapi.json -o src/types/generated.ts"
   },

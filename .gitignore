@@ -48,3 +48,6 @@ datasets/
 # Local data
 *.sqlite3
 *.db
+
+# Mosquitto
+infra/mosquitto/config/passwd

@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
-button {
-    color: orange;
+@layer base {
+  body {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+}
+
+@layer components {
+  .seat-btn {
+    @apply flex h-full w-full flex-col items-center justify-center bg-gray-800 border-white border-2 text-white text-xl hover:bg-white hover:text-gray-800 font-medium py-2 px-4 rounded transition duration-200;
+  }
 }

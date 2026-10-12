@@ -1,0 +1,6 @@
+user engine
+topic readwrite poker/#
+topic read $SYS/#
+
+pattern write poker/table1/%u/#
+pattern read  poker/table1/%u/cmd
