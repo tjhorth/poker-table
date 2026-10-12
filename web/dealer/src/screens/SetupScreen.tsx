@@ -255,7 +255,7 @@ export function SetupScreen({ state }: { state: DealerState }) {
               </li>
             </ul>
             <p className="mb-5 text-sm text-gray-400">
-              You will need to seat players again from the Seats tab.
+              Seat players again from the Seats tab, then press Deal Hand on the Hand tab.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <button

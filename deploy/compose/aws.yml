@@ -1,0 +1,38 @@
+# The stream relay, on a small EC2 instance. OBS at the table pushes ONE
+# stream here; viewers pull from here, so the home connection carries one
+# stream no matter how many people watch.
+#   POKER_CONTEXT=aws ./poker up aws        (runs on the EC2 host over SSH)
+name: poker-aws
+
+services:
+  mediamtx:
+    extends:
+      file: common.yml
+      service: mediamtx
+    restart: unless-stopped
+    volumes:
+      - ../mediamtx/mediamtx.aws.yml:/mediamtx.yml:ro
+    expose:
+      - "8888"                # HLS: only Caddy talks to this
+    ports:
+      - "1935:1935"           # RTMP in from OBS. Lock this port to your home IP in the security group.
+
+  caddy:
+    extends:
+      file: common.yml
+      service: caddy
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS to the stream hostname, e.g. stream.example.com}
+      CADDY_TLS: ${CADDY_TLS:?set CADDY_TLS to an email address for Let's Encrypt}
+    volumes:
+      - ../caddy/Caddyfile.aws:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - mediamtx
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}

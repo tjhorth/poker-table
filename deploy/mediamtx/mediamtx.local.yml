@@ -1,0 +1,18 @@
+# Local / homelab relay: no authentication. Do not expose this to the internet.
+logLevel: info
+
+rtmp: yes
+rtmpAddress: :1935
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigins: ['*']
+
+webrtc: no
+rtsp: no
+srt: no
+api: no
+metrics: no
+pprof: no
+
+paths:
+  all_others:

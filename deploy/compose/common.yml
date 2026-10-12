@@ -1,0 +1,38 @@
+# Service definitions shared by every environment. This file is never run on
+# its own: local.yml, homelab.yml and aws.yml pull services in with `extends`
+# and add what is specific to where they run.
+#
+# Paths in this file are relative to deploy/compose/.
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+    image: poker-api:${POKER_VERSION:-dev}
+    environment:
+      POKER_SIM: ${POKER_SIM:-0}
+      SIM_SPEED: ${SIM_SPEED:-1}
+      POKER_ALLOWED_ORIGINS: ${POKER_ALLOWED_ORIGINS:-*}
+      POKER_API_TOKEN: ${POKER_API_TOKEN:-}
+    volumes:
+      - poker-data:/data
+    stop_grace_period: 10s
+
+  ui:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/ui.Dockerfile
+    image: poker-ui:${POKER_VERSION:-dev}
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+
+  mediamtx:
+    image: bluenviron/mediamtx:1
+
+  caddy:
+    image: caddy:2
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config

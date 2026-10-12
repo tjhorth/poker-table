@@ -1,0 +1,71 @@
+# The home server: game engine, MQTT broker, and the dealer UI behind a
+# reverse proxy with TLS. The stream relay is NOT here by default (it lives in
+# AWS, see aws.yml); add `--profile relay` to also run one at home.
+#   ./poker up homelab
+name: poker-homelab
+
+services:
+  api:
+    extends:
+      file: common.yml
+      service: api
+    restart: unless-stopped
+    environment:
+      POKER_SIM: "0"          # real sensors; set POKER_SIM=1 in the env file to demo
+    # not published: only Caddy (same Docker network) talks to it. Sensors reach
+    # it through Caddy, at https://<SITE_ADDRESS>/ws/events
+
+  ui:
+    extends:
+      file: common.yml
+      service: ui
+    restart: unless-stopped
+
+  mosquitto:
+    extends:
+      file: common.yml
+      service: mosquitto
+    restart: unless-stopped
+    volumes:
+      - ../../infra/mosquitto/config:/mosquitto/config:ro     # mosquitto.conf, acl, passwd
+      - mosquitto-data:/mosquitto/data
+    ports:
+      - "1883:1883"           # sensor nodes; restrict to the IoT VLAN with a firewall rule
+
+  caddy:
+    extends:
+      file: common.yml
+      service: caddy
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-table.home.lan}
+      CADDY_TLS: ${CADDY_TLS:-internal}
+    volumes:
+      - ../caddy/Caddyfile.homelab:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      api:
+        condition: service_healthy
+      ui:
+        condition: service_started
+
+  # optional: run the stream relay at home instead of (or as well as) AWS
+  mediamtx:
+    extends:
+      file: common.yml
+      service: mediamtx
+    profiles: ["relay"]
+    restart: unless-stopped
+    volumes:
+      - ../mediamtx/mediamtx.local.yml:/mediamtx.yml:ro
+    ports:
+      - "1935:1935"
+      - "8888:8888"
+
+volumes:
+  poker-data: {}
+  mosquitto-data: {}
+  caddy-data: {}
+  caddy-config: {}

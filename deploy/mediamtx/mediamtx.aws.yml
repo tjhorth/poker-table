@@ -1,0 +1,37 @@
+# The AWS relay. Publishing needs a password; viewing is protected too.
+#
+# This is a starting point: confirm the authentication keys against the docs
+# for the MediaMTX version you run, they have changed between releases. The
+# invite-link design (short-lived signed tokens) is described in deploy/README.md.
+logLevel: info
+
+rtmp: yes
+rtmpAddress: :1935
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigins: ['https://*']
+
+webrtc: no
+rtsp: no
+srt: no
+api: no
+metrics: no
+pprof: no
+
+authMethod: internal
+authInternalUsers:
+  # OBS at the table: may only publish to the "live" path
+  - user: obs
+    pass: CHANGE_ME_PUBLISH_PASSWORD
+    permissions:
+      - action: publish
+        path: live
+  # stand-in for invite links: one shared viewing login
+  - user: viewer
+    pass: CHANGE_ME_VIEW_PASSWORD
+    permissions:
+      - action: read
+        path: live
+
+paths:
+  live:

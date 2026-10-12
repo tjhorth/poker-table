@@ -1,0 +1,15 @@
+.git
+.venv
+.vscode
+node_modules
+**/node_modules
+web/dealer/dist
+**/__pycache__
+**/*.pyc
+engine/data
+firmware
+infra
+docs
+tests
+scripts
+deploy/env/*.env

@@ -1,0 +1,29 @@
+# The homelab front door. One hostname, one certificate, three destinations.
+#
+#   SITE_ADDRESS  the name clients use, e.g. table.home.lan
+#   CADDY_TLS     "internal" = Caddy's own private CA (install its root cert on
+#                 the iPad once), or an email address to use Let's Encrypt for a
+#                 name you own and that is reachable for validation.
+{$SITE_ADDRESS} {
+    tls {$CADDY_TLS}
+    encode gzip
+
+    # REST + the three WebSockets (Caddy upgrades WebSocket connections itself)
+    handle /api/* {
+        reverse_proxy api:8000
+    }
+    handle /ws/* {
+        reverse_proxy api:8000
+    }
+    handle /overlay/* {
+        reverse_proxy api:8000
+    }
+    handle /health {
+        reverse_proxy api:8000
+    }
+
+    # everything else is the dealer UI
+    handle {
+        reverse_proxy ui:80
+    }
+}

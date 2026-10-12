@@ -1,0 +1,20 @@
+# Local development: plain HTTP on :80 (published as :8080).
+:80 {
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy api:8000
+    }
+    handle /ws/* {
+        reverse_proxy api:8000
+    }
+    handle /overlay/* {
+        reverse_proxy api:8000
+    }
+    handle /health {
+        reverse_proxy api:8000
+    }
+    handle {
+        reverse_proxy ui:80
+    }
+}

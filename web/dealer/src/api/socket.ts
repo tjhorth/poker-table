@@ -11,7 +11,8 @@ function endpoint(): string {
   // page's own origin (Vite proxies /ws to the API in development).
   const server = new URLSearchParams(location.search).get('server')
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${server ?? location.host}/ws/dealer`
+  const token = new URLSearchParams(location.search).get('token')
+  return `${proto}://${server ?? location.host}/ws/dealer${token ? `?token=${encodeURIComponent(token)}` : ''}`
 }
 
 export function connect(): void {

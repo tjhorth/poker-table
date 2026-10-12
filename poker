@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# One entry point for every environment.
+#
+#   ./poker up      <local|homelab|aws>    build and start
+#   ./poker down    <env>                  stop
+#   ./poker logs    <env> [service]        follow logs
+#   ./poker ps      <env>                  what is running
+#   ./poker build   <env>                  build images only
+#   ./poker config  <env>                  print the resolved compose file
+#   ./poker exec    <env> <service> <cmd>  run a command in a running service
+#
+# Run against another machine (the homelab server, the EC2 relay) with a
+# Docker context:
+#   docker context create homelab --docker "host=ssh://you@table-server"
+#   POKER_CONTEXT=homelab ./poker up homelab
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cmd="${1:-}"
+env="${2:-local}"
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+[ -n "$cmd" ] || usage 1
+case "$env" in local|homelab|aws) ;; *) echo "unknown environment: $env" >&2; usage 1 ;; esac
+
+FILE="$ROOT/deploy/compose/$env.yml"
+ENVFILE="$ROOT/deploy/env/$env.env"
+if [ ! -f "$ENVFILE" ]; then
+  cp "$ROOT/deploy/env/$env.env.example" "$ENVFILE"
+  echo "Created $ENVFILE from the example."
+  if [ "$env" != "local" ]; then
+    echo "Review it (hostnames, tokens), then run the command again."
+    exit 1
+  fi
+fi
+
+DOCKER=(docker)
+[ -n "${POKER_CONTEXT:-}" ] && DOCKER=(docker --context "$POKER_CONTEXT")
+COMPOSE=("${DOCKER[@]}" compose -f "$FILE" --env-file "$ENVFILE")
+
+shift 2 || true
+case "$cmd" in
+  up)     "${COMPOSE[@]}" up -d --build --remove-orphans "$@"
+          echo; "${COMPOSE[@]}" ps ;;
+  down)   "${COMPOSE[@]}" down "$@" ;;
+  logs)   "${COMPOSE[@]}" logs -f --tail=100 "$@" ;;
+  ps)     "${COMPOSE[@]}" ps "$@" ;;
+  build)  "${COMPOSE[@]}" build "$@" ;;
+  config) "${COMPOSE[@]}" config "$@" ;;
+  exec)   "${COMPOSE[@]}" exec "$@" ;;
+  *)      usage 1 ;;
+esac

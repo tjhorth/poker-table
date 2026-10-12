@@ -8,19 +8,29 @@ import type { DealerState } from '../types'
 
 function statusLine(s: DealerState): { title: string; detail: string } {
   const name = (seat: number | null) => s.players.find((p) => p.seat === seat)?.name ?? ''
+  const seated = s.players.filter((p) => p.name).length
   const registered = s.players.filter((p) => p.cards > 0).length
   switch (s.phase) {
     case 'waiting':
-      return { title: 'Waiting', detail: s.note ?? 'Waiting for the table…' }
+      return s.canDeal
+        ? { title: 'Ready to deal', detail: `${seated} players seated. Press Deal Hand to start.` }
+        : { title: 'Waiting', detail: s.note ?? 'Waiting for players…' }
     case 'dealing':
-      return { title: 'Dealing', detail: `Hole cards registered: ${registered} of ${s.players.length}` }
+      return { title: 'Dealing', detail: `Hole cards registered: ${registered} of ${seated}` }
+    case 'blinds':
+      return {
+        title: 'Posting blinds',
+        detail: s.config.bomb ? 'Waiting for every ante' : 'Waiting for the blinds',
+      }
     case 'betting':
       return s.toAct
         ? { title: `On action: ${name(s.toAct)}`, detail: 'Betting in progress' }
-        : {
-            title: 'Betting',
-            detail: s.street === 'preflop' ? 'Posting blinds' : 'Waiting for the next action',
-          }
+        : { title: 'Betting', detail: 'Waiting for the next action' }
+    case 'awaiting_board':
+      return {
+        title: `Waiting for the ${s.awaiting.street ?? 'next street'}`,
+        detail: 'Betting is complete. Deal the next card(s).',
+      }
     case 'showdown_ready':
       return s.uncontested
         ? { title: 'Everyone folded', detail: 'Award the pot to finish the hand' }
@@ -46,7 +56,7 @@ export function HandScreen({ state }: { state: DealerState }) {
   const potTotal = state.pots.reduce((sum, p) => sum + p.amount, 0)
   const showModal = state.phase === 'showdown' && state.showdown && !hidden
 
-  const press = (cmd: 'showdown' | 'next_hand') => {
+  const press = (cmd: 'deal_hand' | 'showdown' | 'next_hand') => {
     if (send({ cmd })) setBusy(true)
   }
 
@@ -92,6 +102,16 @@ export function HandScreen({ state }: { state: DealerState }) {
         </section>
 
         <div className="mt-auto flex flex-col gap-3">
+          {state.phase === 'waiting' && (
+            <button
+              type="button"
+              disabled={!state.canDeal || busy || !connected}
+              onClick={() => press('deal_hand')}
+              className="min-h-16 rounded-xl bg-green-500 text-2xl font-bold text-gray-900 active:bg-green-400 disabled:bg-gray-600 disabled:text-gray-400"
+            >
+              Deal Hand
+            </button>
+          )}
           <button
             type="button"
             disabled={!state.canShowdown || busy || !connected}

@@ -1,0 +1,18 @@
+# The public face of the relay. Viewers load HLS over HTTPS from here.
+#
+#   SITE_ADDRESS  stream.example.com (a name you own, pointing at the instance)
+#   CADDY_TLS     an email address; Caddy gets and renews the certificate itself
+{$SITE_ADDRESS} {
+    tls {$CADDY_TLS}
+    encode gzip
+
+    # MediaMTX's HLS server, including its built-in player page:
+    #   https://<SITE_ADDRESS>/hls/live/table1/
+    handle_path /hls/* {
+        reverse_proxy mediamtx:8888
+    }
+
+    handle {
+        respond "stream relay" 200
+    }
+}

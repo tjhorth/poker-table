@@ -1,6 +1,13 @@
 // Shapes sent by the game engine over /ws/dealer.
 
-export type Phase = 'waiting' | 'dealing' | 'betting' | 'showdown_ready' | 'showdown'
+export type Phase =
+  | 'waiting'
+  | 'dealing'
+  | 'blinds'
+  | 'betting'
+  | 'awaiting_board'
+  | 'showdown_ready'
+  | 'showdown'
 export type PlayerStatus = 'active' | 'folded' | 'all_in' | 'empty'
 
 export interface PlayerState {
@@ -92,8 +99,10 @@ export interface DealerState {
   pending: { config: GameConfig; label: string; blinds: string } | null
   options: { variants: Record<string, string>; blindPresets: string[] }
   inactive: InactivePlayer[]
+  canDeal: boolean
   canShowdown: boolean
   canEditStacks: boolean
+  awaiting: { kind: string; street?: string; seats?: number[] }
   note: string | null
   canNextHand: boolean
   uncontested: boolean
@@ -103,6 +112,7 @@ export interface DealerState {
 }
 
 export type Command =
+  | { cmd: 'deal_hand' }
   | { cmd: 'showdown' }
   | { cmd: 'next_hand' }
   | { cmd: 'set_config'; config: Partial<GameConfig> }

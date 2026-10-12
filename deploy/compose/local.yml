@@ -1,0 +1,61 @@
+# Everything on one machine, for development and testing.
+#   ./poker up local
+#
+#   dealer UI + API (via Caddy)   http://localhost:8080
+#   API directly                  http://localhost:8000
+#   MQTT broker (anonymous)       localhost:1883
+#   stream relay                  rtmp://localhost:1935/live  ->  http://localhost:8888/live/table1
+name: poker-local
+
+services:
+  api:
+    extends:
+      file: common.yml
+      service: api
+    environment:
+      POKER_SIM: "1"          # simulated sensors play the table
+    ports:
+      - "8000:8000"
+
+  ui:
+    extends:
+      file: common.yml
+      service: ui
+
+  caddy:
+    extends:
+      file: common.yml
+      service: caddy
+    volumes:
+      - ../caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      ui:
+        condition: service_started
+
+  mosquitto:
+    extends:
+      file: common.yml
+      service: mosquitto
+    volumes:
+      - ../mosquitto/local.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+
+  mediamtx:
+    extends:
+      file: common.yml
+      service: mediamtx
+    volumes:
+      - ../mediamtx/mediamtx.local.yml:/mediamtx.yml:ro
+    ports:
+      - "1935:1935"     # RTMP in (OBS)
+      - "8888:8888"     # HLS out
+
+volumes:
+  poker-data: {}
+  caddy-data: {}
+  caddy-config: {}

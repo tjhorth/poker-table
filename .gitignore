@@ -57,3 +57,6 @@ firmware/**/.pio/
 
 # Game summaries (who played, buy-ins, results)
 engine/data/games/
+
+# Per-environment settings and secrets (the .example files are committed)
+deploy/env/*.env

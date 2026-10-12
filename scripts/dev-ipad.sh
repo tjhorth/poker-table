@@ -11,10 +11,10 @@ API_PORT="${API_PORT:-8000}"
 UI_PORT="${UI_PORT:-5173}"
 export SIM_SPEED="${SIM_SPEED:-0.6}"
 
-if [ -x "$ROOT/.venv/bin/uvicorn" ]; then
-  UVICORN="$ROOT/.venv/bin/uvicorn"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
 else
-  UVICORN="pipenv run uvicorn"
+  PYTHON="python3"
 fi
 
 cleanup() {
@@ -26,7 +26,8 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 cd "$ROOT"
-$UVICORN api.main:app --host 0.0.0.0 --port "$API_PORT" --log-level warning &
+# `python -m api` reads api/config.py (host, port, WebSocket keep-alive, ...)
+POKER_HOST=0.0.0.0 POKER_PORT="$API_PORT" "$PYTHON" -m api &
 API_PID=$!
 
 cd "$ROOT/web/dealer"

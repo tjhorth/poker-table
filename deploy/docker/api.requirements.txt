@@ -1,0 +1,6 @@
+# Pinned to the versions the project was developed and tested with.
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+websockets==17.2
+pokerkit==0.7.6
+paho-mqtt==2.1.0
