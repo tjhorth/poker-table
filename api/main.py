@@ -10,14 +10,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .hub import Hub
-from .sim import TableSim
+from .sim import GAMES_DIR, TableSim
 
 hub = Hub()
 sim = TableSim(hub)
@@ -36,6 +39,30 @@ app = FastAPI(title="Poker table", lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "hand": sim.hand, "phase": sim.phase}
+
+
+@app.get("/api/games")
+async def recent_games(limit: int = 3) -> list[dict]:
+    """Summaries of the most recent saved games, newest first."""
+    limit = max(1, min(limit, 50))
+    files = sorted(GAMES_DIR.glob("game-*.json"), reverse=True)[:limit] if GAMES_DIR.is_dir() else []
+    games = []
+    for f in files:
+        try:
+            games.append({"id": f.stem, **json.loads(f.read_text())})
+        except (OSError, ValueError):
+            continue                      # skip a file that is unreadable or half written
+    return games
+
+
+@app.get("/api/games/{game_id}.csv")
+async def game_csv(game_id: str) -> FileResponse:
+    if not re.fullmatch(r"game-\d{8}-\d{6}", game_id):
+        raise HTTPException(404)
+    path = GAMES_DIR / f"{game_id}.csv"
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/csv", filename=f"{game_id}.csv")
 
 
 @app.websocket("/ws/dealer")

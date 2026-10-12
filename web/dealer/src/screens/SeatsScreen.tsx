@@ -27,6 +27,7 @@ export function SeatsScreen({ state }: { state: DealerState }) {
             <tr>
               <th className="px-4 py-1">Seat</th>
               <th className="px-4 py-1">Player</th>
+              <th className="px-4 py-1 text-right">Hands</th>
               <th className="px-4 py-1 text-right">Stack</th>
               <th className="px-4 py-1 text-right">Bought in</th>
               <th className="px-4 py-1 text-right">Net</th>
@@ -57,12 +58,13 @@ export function SeatsScreen({ state }: { state: DealerState }) {
                     )}
                   </td>
                   {empty ? (
-                    <td colSpan={4} className="rounded-r-xl px-4 py-3 text-gray-500">
+                    <td colSpan={5} className="rounded-r-xl px-4 py-3 text-gray-500">
                       Empty. Tap to seat a player.
                     </td>
                   ) : (
                     <>
                       <td className="px-4 py-3 font-semibold">{p.name}</td>
+                      <td className="px-4 py-3 text-right text-gray-300">{p.hands}</td>
                       <td className="px-4 py-3 text-right text-green-400">{money(p.stack)}</td>
                       <td className="px-4 py-3 text-right">{money(p.buyIn)}</td>
                       <td className="rounded-r-xl px-4 py-3 text-right">
@@ -77,7 +79,7 @@ export function SeatsScreen({ state }: { state: DealerState }) {
             {state.inactive.length > 0 && (
               <>
                 <tr>
-                  <td colSpan={5} className="px-4 pb-0 pt-4 text-xs uppercase tracking-wide text-gray-500">
+                  <td colSpan={6} className="px-4 pb-0 pt-4 text-xs uppercase tracking-wide text-gray-500">
                     Not seated
                   </td>
                 </tr>
@@ -89,6 +91,7 @@ export function SeatsScreen({ state }: { state: DealerState }) {
                   >
                     <td className="rounded-l-xl px-4 py-3 text-gray-500">—</td>
                     <td className="px-4 py-3 font-semibold">{p.name}</td>
+                    <td className="px-4 py-3 text-right">{p.hands}</td>
                     <td className="px-4 py-3 text-right">{money(p.stack)}</td>
                     <td className="px-4 py-3 text-right">{money(p.buyIn)}</td>
                     <td className="rounded-r-xl px-4 py-3 text-right">

@@ -12,6 +12,7 @@ export interface PlayerState {
   lastAction: string | null  // "RAISE $6", "FOLD", ...
   cards: number              // how many hole cards are registered (never the cards)
   isButton: boolean
+  hands: number              // hands dealt in this game
   buyIn: number              // total bought in (first stack plus every add)
   cashedOut: number          // chips taken off the table
   net: number                // stack + cashed out - bought in
@@ -22,6 +23,7 @@ export interface InactivePlayer {
   id: number
   name: string
   stack: number              // the stack they left with
+  hands: number
   buyIn: number
   cashedOut: number
   net: number
@@ -96,6 +98,8 @@ export interface DealerState {
   canNextHand: boolean
   uncontested: boolean
   showdown: ShowdownResult | null
+  game: { startedAt: string; handsPlayed: number }
+  lastSummary: { file: string; savedAt: string; handsPlayed: number; players: number } | null
 }
 
 export type Command =
@@ -107,3 +111,25 @@ export type Command =
   | { cmd: 'remove_player'; seat: number }
   | { cmd: 'add_player'; seat: number; name: string; stack: number }
   | { cmd: 'seat_returning'; seat: number; id: number; stack: number }
+  | { cmd: 'new_game' }
+
+export interface GameSummaryPlayer {
+  name: string
+  seat: number | null
+  status: 'seated' | 'left'
+  handsPlayed: number
+  buyIn: number
+  cashedOut: number
+  endingStack: number
+  net: number
+}
+
+export interface GameSummary {
+  id: string
+  startedAt: string
+  endedAt: string
+  handsPlayed: number
+  game: { label: string; blinds: string; bombPot: boolean; ante: number | null }
+  players: GameSummaryPlayer[]
+  totals: { buyIn: number; endingStack: number; cashedOut: number; net: number }
+}

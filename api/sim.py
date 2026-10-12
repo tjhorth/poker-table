@@ -14,9 +14,13 @@ Showdown results use PokerKit's hand evaluation.
 from __future__ import annotations
 
 import asyncio
+import csv
+import json
 import os
 import random
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from pokerkit import Card, OmahaHoldemHand, StandardHighHand
@@ -34,6 +38,7 @@ BLIND_PRESETS = ["1/2", "2/5", "5/10", "10/20", "25/50"]
 DEFAULT_CONFIG = {"variant": "nlh", "boards": 1, "bomb": False, "ante": 5, "sb": 1, "bb": 2}
 CARD_ORDER = "AKQJT98765432"
 SPEED = float(os.environ.get("SIM_SPEED", "1"))   # lower = faster simulated play
+GAMES_DIR = Path(os.environ.get("POKER_GAMES_DIR", Path(__file__).resolve().parents[1] / "engine" / "data" / "games"))
 
 
 async def sleep(seconds: float) -> None:
@@ -61,7 +66,7 @@ class TableSim:
     def __init__(self, hub: Hub) -> None:
         self.hub = hub
         self.version = 0
-        self.hand = 41
+        self.hand = 0
         self.button = 8
         self.config: dict[str, Any] = dict(DEFAULT_CONFIG)
         self.pending: dict[str, Any] | None = None
@@ -75,9 +80,16 @@ class TableSim:
         self.stack = {s: STACKS[s - 1] for s in SEATS}
         self.buy_in = {s: STACKS[s - 1] for s in SEATS}
         self.cashed_out = {s: 0 for s in SEATS}
+        self.hands = {s: 0 for s in SEATS}          # hands each seated player was dealt into
         # players who left the table: their ledger is kept, with no seat
         self.inactive: list[dict[str, Any]] = []
         self._next_id = 1
+
+        # the game as a whole
+        self.game_started = datetime.now()
+        self.game_hands = 0                          # completed hands
+        self.last_summary: dict[str, Any] | None = None
+        self._abort_for_new_game = False
 
         self._reset()
         self.phase = "waiting"
@@ -148,6 +160,7 @@ class TableSim:
                 "lastAction": self.last_action.get(seat),
                 "cards": len(self.dealt.get(seat, [])) if seat in self.registered else 0,
                 "isButton": seat == self.button and name is not None,
+                "hands": self.hands[seat] if name else 0,
                 "buyIn": self.buy_in[seat] if name else 0,
                 "cashedOut": self.cashed_out[seat] if name else 0,
                 "net": (self.stack[seat] + self.cashed_out[seat] - self.buy_in[seat]) if name else 0,
@@ -186,6 +199,11 @@ class TableSim:
             "uncontested": in_hand and len([s for s in self.dealt if s not in self.folded]) == 1,
             "showdown": self.result,
             "note": self.note,
+            "game": {
+                "startedAt": self.game_started.isoformat(timespec="seconds"),
+                "handsPlayed": self.game_hands,
+            },
+            "lastSummary": self.last_summary,
         }
 
     async def publish(self) -> None:
@@ -302,12 +320,14 @@ class TableSim:
                 "stack": self.stack[seat],          # what they left with
                 "buyIn": self.buy_in[seat],
                 "cashedOut": self.cashed_out[seat],
+                "hands": self.hands[seat],
             })
             self._next_id += 1
             self.names[seat] = None
             self.stack[seat] = 0
             self.buy_in[seat] = 0
             self.cashed_out[seat] = 0
+            self.hands[seat] = 0
             await self.publish()
 
         elif cmd == "seat_returning":
@@ -332,6 +352,7 @@ class TableSim:
             self.stack[seat] = stack
             self.buy_in[seat] = buy_in
             self.cashed_out[seat] = cashed
+            self.hands[seat] = entry.get("hands", 0)
             self.inactive.remove(entry)
             await self.publish()
 
@@ -351,10 +372,111 @@ class TableSim:
             self.stack[seat] = stack
             self.buy_in[seat] = stack
             self.cashed_out[seat] = 0
+            self.hands[seat] = 0
             await self.publish()
+
+        elif cmd == "new_game":
+            return await self._new_game()
 
         else:
             return f"Unknown command {cmd!r}."
+        return None
+
+    # ------------------------------------------------------------ new game
+
+    def _summary(self, ended: datetime) -> dict[str, Any]:
+        rows = []
+        for seat in SEATS:
+            if self.names[seat] is None:
+                continue
+            rows.append({
+                "name": self.names[seat], "seat": seat, "status": "seated",
+                "handsPlayed": self.hands[seat], "buyIn": self.buy_in[seat],
+                "cashedOut": self.cashed_out[seat], "endingStack": self.stack[seat],
+                "net": self.stack[seat] + self.cashed_out[seat] - self.buy_in[seat],
+            })
+        for e in self.inactive:
+            rows.append({
+                "name": e["name"], "seat": None, "status": "left",
+                "handsPlayed": e.get("hands", 0), "buyIn": e["buyIn"],
+                "cashedOut": e["cashedOut"], "endingStack": e["stack"],
+                "net": e["stack"] + e["cashedOut"] - e["buyIn"],
+            })
+        rows.sort(key=lambda r: r["net"], reverse=True)
+        cfg = self.config
+        return {
+            "startedAt": self.game_started.isoformat(timespec="seconds"),
+            "endedAt": ended.isoformat(timespec="seconds"),
+            "handsPlayed": self.game_hands,
+            "game": {"label": game_label(cfg), "blinds": self.blinds, "bombPot": cfg["bomb"],
+                     "ante": cfg["ante"] if cfg["bomb"] else None, "config": cfg},
+            "players": rows,
+            "totals": {
+                "buyIn": sum(r["buyIn"] for r in rows),
+                "endingStack": sum(r["endingStack"] for r in rows),
+                "cashedOut": sum(r["cashedOut"] for r in rows),
+                "net": sum(r["net"] for r in rows),
+            },
+        }
+
+    def _save_summary(self, summary: dict[str, Any], ended: datetime) -> str:
+        GAMES_DIR.mkdir(parents=True, exist_ok=True)
+        stem = f"game-{ended.strftime('%Y%m%d-%H%M%S')}"
+        (GAMES_DIR / f"{stem}.json").write_text(json.dumps(summary, indent=2) + "\n")
+        with (GAMES_DIR / f"{stem}.csv").open("w", newline="") as f:
+            out = csv.writer(f)
+            out.writerow(["player", "hands_played", "bought_in", "cashed_out", "ending_stack", "net"])
+            for r in summary["players"]:
+                out.writerow([r["name"], r["handsPlayed"], r["buyIn"], r["cashedOut"],
+                              r["endingStack"], r["net"]])
+        try:
+            return str((GAMES_DIR / f"{stem}.json").relative_to(Path(__file__).resolve().parents[1]))
+        except ValueError:
+            return str(GAMES_DIR / f"{stem}.json")
+
+    async def _new_game(self) -> str | None:
+        """Save a summary of this game, clear the seats, keep the settings."""
+        if self.phase not in ("waiting", "showdown"):
+            return "Finish the hand before starting a new game."
+        ended = datetime.now()
+        if self.phase == "showdown":
+            self.game_hands += 1                     # the hand on screen is finished
+        summary = self._summary(ended)
+        if not summary["players"]:
+            if self.phase == "showdown":
+                self.game_hands -= 1
+            return "There is nothing to save yet: no players have sat down."
+        saved = self._save_summary(summary, ended)
+
+        # a queued settings change is part of "the settings selected": use it
+        if self.pending:
+            self.config, self.pending = self.pending, None
+
+        for s in SEATS:
+            self.names[s] = None
+            self.stack[s] = 0
+            self.buy_in[s] = 0
+            self.cashed_out[s] = 0
+            self.hands[s] = 0
+        self.inactive = []
+        self.hand = 0
+        self.game_hands = 0
+        self.game_started = datetime.now()
+        self.button = SEATS[-1]
+        self.last_summary = {
+            "file": saved, "savedAt": ended.isoformat(timespec="seconds"),
+            "handsPlayed": summary["handsPlayed"], "players": len(summary["players"]),
+        }
+
+        if self.phase == "showdown":
+            self._abort_for_new_game = True          # unblock the hand waiting on Next Hand
+            self._reset()
+            self.phase = "waiting"
+            self._next.set()
+        else:
+            self._reset()
+            self.phase = "waiting"
+        await self.publish()
         return None
 
     async def _set_config(self, changes: dict) -> str | None:
@@ -483,6 +605,9 @@ class TableSim:
         self.boards = [extra[i * 5:(i + 1) * 5] for i in range(cfg["boards"])]
         self.revealed = 0
 
+        for seat in order:
+            self.hands[seat] += 1
+
         players = [{"seat": s, "name": self.names[s], "stack": self.stack[s]} for s in order]
         await self.hub.emit({"type": "hand_start", "hand": self.hand, "game": game_label(cfg),
                              "hole_cards": holes, "blinds": self.blinds, "button": self.button,
@@ -518,6 +643,13 @@ class TableSim:
         await self.publish()
         await self._next.wait()
         self._next.clear()
+
+        if self._abort_for_new_game:
+            # the dealer started a new game instead: clear the overlay and stop
+            self._abort_for_new_game = False
+            await self.hub.emit({"type": "next_hand", "winners": []})
+            return
+        self.game_hands += 1
 
         winners = [{"seat": w["seat"], "amount": w["won"], "stack": self.stack[w["seat"]]}
                    for w in self.result["players"] if w["won"] > 0]

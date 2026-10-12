@@ -54,3 +54,6 @@ infra/mosquitto/config/passwd
 # Firmware
 firmware/**/include/secrets.h
 firmware/**/.pio/
+
+# Game summaries (who played, buy-ins, results)
+engine/data/games/
